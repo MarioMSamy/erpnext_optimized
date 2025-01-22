@@ -38,7 +38,7 @@ This repository contains a **comprehensive installation script** for deploying E
 
 ### Download the Script
 ```bash
-wget https://example.com/advanced_erpnext_installer.sh
+wget https://raw.githubusercontent.com/MarioMSamy/erpnext_optimized/refs/heads/main/erpnext_installer.sh
 ```
 
 ### Make It Executable
