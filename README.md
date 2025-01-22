@@ -79,7 +79,7 @@ This script automates the installation of **ERPNext**, a powerful open-source ER
 
 1. **Download the Script**:
    ```bash
-   wget https://example.com/erpnext_installer.sh
+   wget https://raw.githubusercontent.com/MarioMSamy/erpnext_optimized/refs/heads/main/erpnext_installer.sh
    ```
 
 2. **Make It Executable**:
