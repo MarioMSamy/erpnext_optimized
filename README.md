@@ -1,132 +1,111 @@
-# ERPNext Installation Script with Optimizations
+# ERPNext Advanced Installer
 
-This script automates the installation of **ERPNext**, a powerful open-source ERP system, while applying **best practices** and **performance optimizations** tailored to your server's resources. It is designed to simplify the setup process, ensuring a smooth and efficient deployment of ERPNext on **Ubuntu** or **Debian** systems.
-
----
-
-## Key Features
-
-1. **Automated ERPNext Installation**:
-   - Installs ERPNext versions **13**, **14**, or **15** based on user selection.
-   - Handles dependencies, including Python, Node.js, MariaDB, Redis, and more.
-
-2. **Resource-Based Optimizations**:
-   - Dynamically adjusts **MariaDB** settings (e.g., buffer pool size, max connections) based on available RAM and CPU cores.
-   - Optimizes **Node.js** memory limits for better performance.
-   - Configures **Python** garbage collection and installs performance monitoring tools.
-
-3. **System-Wide Performance Tuning**:
-   - Increases file descriptor limits for better scalability.
-   - Adjusts kernel parameters for improved TCP performance and reduced swap usage.
-   - Optimizes disk I/O settings, especially for SSDs.
-
-4. **ERPNext Bench Optimization**:
-   - Configures worker counts for background jobs and Gunicorn based on CPU cores.
-   - Enables **Redis** for caching, queues, and Socket.IO for better performance.
-
-5. **SSL Certificate Installation**:
-   - Optionally installs **Let's Encrypt SSL certificates** for secure access to your ERPNext site.
-
-6. **User-Friendly Prompts**:
-   - Guides the user through version selection, database password setup, and other configurations.
-   - Provides clear feedback and progress updates during installation.
-
-7. **Error Handling**:
-   - Includes robust error handling to ensure the script exits gracefully in case of failures.
-   - Logs errors with line numbers for easier debugging.
-
-8. **Compatibility Checks**:
-   - Validates the operating system and version to ensure compatibility with ERPNext.
-   - Checks for minimum Python and Node.js versions and installs them if necessary.
-
-9. **Production-Ready Setup**:
-   - Configures **Supervisor** and **Nginx** for production environments.
-   - Enables and resumes the scheduler for automated background tasks.
-
-10. **Development Mode Support**:
-    - Sets up ERPNext for development with `bench start` for local testing.
+This repository contains a **comprehensive installation script** for deploying ERPNext with advanced optimizations. It simplifies the deployment process and ensures optimal performance on **Ubuntu** or **Debian** systems.
 
 ---
 
-## What the Script Does
+## Features
 
-1. **Installs Dependencies**:
-   - Git, Curl, Python 3.10+, Node.js, MariaDB, Redis, and other required packages.
+1. **Automated ERPNext Installation**
+   - Supports ERPNext versions **13**, **14**, and **15**.
+   - Handles dependencies: Python, Node.js, MariaDB, Redis, Nginx, and more.
 
-2. **Configures MariaDB**:
-   - Secures the database with a user-provided root password.
-   - Optimizes InnoDB settings, connection limits, and query performance.
+2. **Dynamic Resource Optimization**
+   - Configures MariaDB settings based on available RAM and CPU.
+   - Optimizes Node.js memory allocation and Python garbage collection.
 
-3. **Sets Up ERPNext**:
-   - Initializes the Bench environment.
-   - Creates a new site with the provided name and administrator password.
-   - Installs ERPNext and optional apps like **HRMS**.
+3. **Enhanced Performance Tuning**
+   - Increases file descriptor limits for scalability.
+   - Adjusts kernel parameters for faster TCP and reduced swap usage.
+   - SSD-specific optimizations for improved disk I/O.
 
-4. **Optimizes Performance**:
-   - Adjusts system, database, and application settings for optimal performance.
+4. **Production-Ready Setup**
+   - Configures Supervisor and Nginx.
+   - Optional SSL installation using Let's Encrypt.
+   - Enables background job workers and caching via Redis.
 
-5. **Configures Production Environment**:
-   - Sets up Supervisor and Nginx for production deployment.
-   - Optionally installs SSL certificates for secure access.
+5. **Rollback and Error Handling**
+   - Includes robust error handling with rollback support for failed installations.
+   - Logs all actions for troubleshooting.
 
-6. **Provides Clear Instructions**:
-   - Guides the user through the installation process with prompts and feedback.
-   - Displays success messages and next steps after installation.
+6. **Customizable and User-Friendly**
+   - Allows interactive prompts for configuration.
+   - Validates domain names and passwords for reliability.
 
 ---
 
 ## How to Use
 
-1. **Download the Script**:
-   ```bash
-   wget https://raw.githubusercontent.com/MarioMSamy/erpnext_optimized/refs/heads/main/erpnext_installer.sh
-   ```
+### Download the Script
+```bash
+wget https://example.com/advanced_erpnext_installer.sh
+```
 
-2. **Make It Executable**:
-   ```bash
-   chmod +x erpnext_installer.sh
-   ```
+### Make It Executable
+```bash
+chmod +x advanced_erpnext_installer.sh
+```
 
-3. **Run the Script**:
-   ```bash
-   sudo ./erpnext_installer.sh
-   ```
+### Run the Script
+```bash
+sudo ./advanced_erpnext_installer.sh
+```
 
-4. **Follow the Prompts**:
-   - Select the ERPNext version.
-   - Provide a database root password.
-   - Enter the site name and administrator password.
-   - Choose whether to install SSL and additional apps like HRMS.
+### Follow the Prompts
+- Provide the ERPNext version, database credentials, and domain name.
+- Select optional configurations like SSL and additional apps.
 
-5. **Access ERPNext**:
-   - After installation, access ERPNext at `http://<your-server-ip>` or `https://<your-domain>` (if SSL is enabled).
+### Access ERPNext
+- After installation, visit:
+  - `http://<your-server-ip>`
+  - `https://<your-domain>` (if SSL is enabled)
 
 ---
 
 ## System Requirements
 
 - **Operating System**: Ubuntu 20.04/22.04 or Debian 10/11/12.
-- **RAM**: Minimum 4GB (8GB or more recommended for production).
+- **RAM**: Minimum 4GB (8GB recommended).
 - **CPU**: 2 cores or more.
-- **Disk Space**: At least 20GB of free space.
+- **Disk Space**: At least 20GB free.
+
+---
+
+## Change Log
+
+### Version 2.0
+- Added rollback functionality for safer installations.
+- Enhanced error handling with detailed logging.
+- Introduced SSD-specific optimizations.
+- Improved domain validation for SSL setup.
+- Added support for Python 3.10 and custom Node.js versions.
+
+### Version 1.1
+- Integrated advanced MariaDB tuning based on server resources.
+- Optimized TCP and memory configurations for better scalability.
+- Included a retry mechanism for failed commands.
+
+### Version 1.0
+- Initial release with automated ERPNext installation.
+- Basic dependency management and performance tuning.
 
 ---
 
 ## Why Use This Script?
 
-- **Saves Time**: Automates the entire ERPNext installation process.
-- **Ensures Best Practices**: Applies performance optimizations and security settings.
-- **Customizable**: Allows users to choose ERPNext versions and optional features.
-- **Production-Ready**: Configures the system for high-performance, scalable deployments.
+- **Comprehensive**: Automates installation with advanced optimizations.
+- **Reliable**: Handles errors and provides rollback support.
+- **Scalable**: Configures server settings for high performance.
+- **Secure**: Supports SSL installation for secure access.
 
 ---
 
 ## Example Output
 
-```
+```bash
 Welcome to the ERPNext Installer...
 
-Please enter the number of the corresponding ERPNext version you wish to install:
+Please enter the ERPNext version:
 1) Version 13
 2) Version 14
 3) Version 15
@@ -140,6 +119,6 @@ Optimizing MariaDB configuration...
 Setting up ERPNext site...
 Production setup complete!
 
-Congratulations! You have successfully installed ERPNext Version 14.
-You can start using your new ERPNext installation by visiting https://your-site.com.
+Congratulations! ERPNext Version 14 is now ready.
+Access your installation at https://your-site.com or http://<server-ip>.
 Enjoy using ERPNext!
