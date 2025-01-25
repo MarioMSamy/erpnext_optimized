@@ -330,18 +330,12 @@ EOF'
     log "${GREEN}MariaDB configuration successful!${NC}"
 }
 
-# Function to install NVM, Node.js, and Yarn
+# Function to install Node.js, and Yarn
 install_nodejs() {
-    log "${YELLOW}Installing NVM, Node.js, and Yarn...${NC}"
-
-    # Ensure PS1 is set in /root/.bashrc
-    if ! grep -q "PS1=" /root/.bashrc; then
-        echo 'if [ -z "$PS1" ]; then PS1="\u@\h:\w\$ "; fi' | sudo tee -a /root/.bashrc > /dev/null
-    fi
+    log "${YELLOW}Installing Node.js, and Yarn...${NC}"
 
     # Install NVM
     retry_command "curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash"
-    source ~/.profile
 
     # Install Node.js based on bench version
     if [[ "$bench_version" == "version-15" ]]; then
