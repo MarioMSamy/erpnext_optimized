@@ -333,8 +333,17 @@ EOF'
 # Function to install NVM, Node.js, and Yarn
 install_nodejs() {
     log "${YELLOW}Installing NVM, Node.js, and Yarn...${NC}"
+
+    # Ensure PS1 is set in /root/.bashrc
+    if ! grep -q "PS1=" /root/.bashrc; then
+        echo 'if [ -z "$PS1" ]; then PS1="\u@\h:\w\$ "; fi' | sudo tee -a /root/.bashrc > /dev/null
+    fi
+
+    # Install NVM
     retry_command "curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash"
     source ~/.profile
+
+    # Install Node.js based on bench version
     if [[ "$bench_version" == "version-15" ]]; then
         retry_command "nvm install 18"
         node_version="18"
@@ -342,8 +351,11 @@ install_nodejs() {
         retry_command "nvm install 16"
         node_version="16"
     fi
+
+    # Install Yarn
     retry_command "sudo apt-get -qq install npm -y"
     retry_command "sudo npm install -g yarn"
+
     log "${GREEN}Node.js and Yarn installation successful!${NC}"
 }
 
