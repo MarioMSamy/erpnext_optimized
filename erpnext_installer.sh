@@ -3,14 +3,13 @@
 # Setting error handler
 handle_error() {
     local line=$1
-    local exit_code=$2
-    echo -e "${RED}An error occurred on line $line with exit status $exit_code${NC}"
-    rollback
+    local exit_code=$?
+    echo "An error occurred on line $line with exit status $exit_code"
     exit $exit_code
 }
 
-trap 'handle_error $LINENO $?' ERR
-set -euo pipefail
+trap 'handle_error $LINENO' ERR
+set -e
 
 # Retrieve server IP
 server_ip=$(hostname -I | awk '{print $1}')
@@ -22,299 +21,263 @@ RED='\033[0;31m'
 LIGHT_BLUE='\033[1;34m'
 NC='\033[0m' # No Color
 
-# Logging function
-log() {
-    local log_file="/var/log/erpnext_installer.log"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-    echo -e "[$timestamp] $1" | tee -a "$log_file"
-}
+# Checking Supported OS and distribution
+SUPPORTED_DISTRIBUTIONS=("Ubuntu" "Debian")
+SUPPORTED_VERSIONS=("24.04" "23.04" "22.04" "20.04" "12" "11" "10" "9" "8")
 
-# Rollback function
-rollback() {
-    echo -e "${RED}Rolling back changes...${NC}"
+check_os() {
+    local os_name=$(lsb_release -is)
+    local os_version=$(lsb_release -rs)
+    local os_supported=false
+    local version_supported=false
 
-    # Remove installed packages
-    sudo apt remove --purge mariadb-server redis-server nginx -y
-    sudo apt autoremove -y
-
-    # Remove NVM and Node.js
-    rm -rf ~/.nvm
-    sed -i '/NVM_DIR/d' ~/.profile
-
-    # Restore /etc/sysctl.conf
-    if [[ -f /etc/sysctl.conf.backup ]]; then
-        sudo mv /etc/sysctl.conf.backup /etc/sysctl.conf
-    fi
-
-    # Restore MariaDB configuration
-    if [[ -f /etc/mysql/my.cnf.backup ]]; then
-        sudo mv /etc/mysql/my.cnf.backup /etc/mysql/my.cnf
-    fi
-
-    # Remove Bench installation
-    if [[ -d ~/frappe-bench ]]; then
-        rm -rf ~/frappe-bench
-    fi
-
-    echo -e "${YELLOW}Rollback complete.${NC}"
-}
-
-# Validate domain name
-validate_domain() {
-    local domain="$1"
-    if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        echo -e "${RED}Invalid domain name. Please enter a valid domain (e.g., example.com).${NC}"
-        return 1
-    fi
-    return 0
-}
-
-# Validate password strength
-validate_password() {
-    local password="$1"
-    if [[ ${#password} -lt 8 ]]; then
-        echo -e "${RED}Password must be at least 8 characters long.${NC}"
-        return 1
-    fi
-    return 0
-}
-
-# Function to securely prompt for input twice (e.g., passwords)
-ask_twice() {
-    local prompt="$1"
-    local is_password="$2"
-    local value1=""
-    local value2=""
-
-    while true; do
-        if [[ "$is_password" == "true" ]]; then
-            read -sp "$prompt: " value1
-            echo
-            read -sp "Confirm $prompt: " value2
-            echo
-        else
-            read -p "$prompt: " value1
-            read -p "Confirm $prompt: " value2
-        fi
-
-        if [[ "$value1" == "$value2" ]]; then
-            echo "$value1"
-            return 0
-        else
-            echo -e "${RED}Inputs do not match. Please try again.${NC}"
-        fi
-    done
-}
-
-# Retry mechanism for failed commands
-retry_command() {
-    local command="$1"
-    local max_retries=3
-    local retry_delay=5
-
-    for ((i = 1; i <= max_retries; i++)); do
-        if eval "$command"; then
-            return 0
-        else
-            echo -e "${YELLOW}Attempt $i failed. Retrying in $retry_delay seconds...${NC}"
-            sleep "$retry_delay"
+    for i in "${SUPPORTED_DISTRIBUTIONS[@]}"; do
+        if [[ "$i" = "$os_name" ]]; then
+            os_supported=true
+            break
         fi
     done
 
-    echo -e "${RED}Command failed after $max_retries attempts.${NC}"
-    return 1
-}
+    for i in "${SUPPORTED_VERSIONS[@]}"; do
+        if [[ "$i" = "$os_version" ]]; then
+            version_supported=true
+            break
+        fi
+    done
 
-# Function to optimize MariaDB based on server resources
-optimize_mariadb() {
-    local total_ram=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local ram_mb=$((total_ram / 1024))
-    local cpu_cores=$(nproc)
-
-    log "${YELLOW}Optimizing MariaDB configuration based on server resources...${NC}"
-
-    # Calculate InnoDB buffer pool size (70% of total RAM, max 16GB)
-    local innodb_buffer_pool_size=$((ram_mb * 70 / 100))
-    if [[ $innodb_buffer_pool_size -gt 16384 ]]; then
-        innodb_buffer_pool_size=16384
-    fi
-
-    # Calculate max connections (based on CPU cores)
-    local max_connections=$((cpu_cores * 100))
-
-    # Backup existing configuration
-    sudo cp /etc/mysql/my.cnf /etc/mysql/my.cnf.backup
-
-    # Append optimized settings to my.cnf
-    sudo bash -c "cat << EOF >> /etc/mysql/my.cnf
-[mysqld]
-# InnoDB Settings
-innodb_buffer_pool_size = ${innodb_buffer_pool_size}M
-innodb_log_file_size = 512M
-innodb_log_buffer_size = 64M
-innodb_flush_log_at_trx_commit = 1
-innodb_file_per_table = 1
-innodb_flush_method = O_DIRECT
-
-# Connection Settings
-max_connections = $max_connections
-max_user_connections = 100
-wait_timeout = 600
-interactive_timeout = 600
-
-# Query Cache Settings (disabled for MariaDB 10+)
-query_cache_type = 0
-query_cache_size = 0
-
-# Threading Settings
-thread_cache_size = $cpu_cores
-thread_stack = 256K
-
-# Buffer Settings
-key_buffer_size = 64M
-sort_buffer_size = 4M
-read_buffer_size = 4M
-read_rnd_buffer_size = 4M
-join_buffer_size = 4M
-
-# Logging Settings
-slow_query_log = 1
-slow_query_log_file = /var/log/mysql/slow.log
-long_query_time = 2
-log_queries_not_using_indexes = 1
-
-# Temporary Tables
-tmp_table_size = 64M
-max_heap_table_size = 64M
-EOF"
-
-    # Restart MariaDB to apply changes
-    sudo systemctl restart mariadb
-    log "${GREEN}MariaDB optimization complete!${NC}"
-}
-
-# Function to optimize system-wide settings
-optimize_system() {
-    log "${YELLOW}Optimizing system-wide settings...${NC}"
-
-    # Backup /etc/sysctl.conf
-    sudo cp /etc/sysctl.conf /etc/sysctl.conf.backup
-
-    # Increase file descriptor limits
-    sudo bash -c "echo '* soft nofile 65535' >> /etc/security/limits.conf"
-    sudo bash -c "echo '* hard nofile 65535' >> /etc/security/limits.conf"
-
-    # Adjust kernel parameters for better performance
-    sudo bash -c "cat << EOF >> /etc/sysctl.conf
-# Increase TCP buffer sizes
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216
-
-# Increase the number of open files
-fs.file-max = 65535
-
-# Reduce swap usage (prioritize RAM)
-vm.swappiness = 10
-vm.dirty_ratio = 60
-vm.dirty_background_ratio = 2
-
-# Increase the number of incoming connections
-net.core.somaxconn = 65535
-net.ipv4.tcp_max_syn_backlog = 65535
-
-# Enable TCP fast open
-net.ipv4.tcp_fastopen = 3
-EOF"
-
-    # Apply kernel settings
-    sudo sysctl -p
-
-    # Optimize disk I/O (if using SSDs)
-    if [[ $(lsblk -d -o rota | grep -c 0) -gt 0 ]]; then
-        log "${YELLOW}SSD detected. Optimizing disk I/O...${NC}"
-        sudo bash -c "echo 'noop' > /sys/block/$(lsblk -nd -o name)/queue/scheduler"
-        sudo bash -c "echo 'vm.dirty_background_ratio = 5' >> /etc/sysctl.conf"
-        sudo bash -c "echo 'vm.dirty_ratio = 10' >> /etc/sysctl.conf"
-        sudo sysctl -p
-    fi
-
-    log "${GREEN}System-wide optimization complete!${NC}"
-}
-
-# Function to check disk space
-check_disk_space() {
-    local required_space=2048 # 2GB in MB
-    local available_space=$(df -m / | awk 'NR==2 {print $4}')
-
-    if [[ $available_space -lt $required_space ]]; then
-        echo -e "${RED}Insufficient disk space. At least 2GB of free space is required.${NC}"
+    if [[ "$os_supported" = false ]] || [[ "$version_supported" = false ]]; then
+        echo -e "${RED}This script is not compatible with your operating system or its version.${NC}"
         exit 1
     fi
 }
 
-# Function to install dependencies
-install_dependencies() {
-    log "${YELLOW}Installing dependencies...${NC}"
-    retry_command "sudo apt update"
-    retry_command "sudo apt install software-properties-common git curl -y"
-    retry_command "sudo apt install python3-dev python3-setuptools python3-venv python3-pip redis-server -y"
+check_os
+
+# Detect the platform (similar to $OSTYPE)
+OS="`uname`"
+case $OS in
+  'Linux')
+    OS='Linux'
+    if [ -f /etc/redhat-release ] ; then
+      DISTRO='CentOS'
+    elif [ -f /etc/debian_version ] ; then
+      if [ "$(lsb_release -si)" == "Ubuntu" ]; then
+        DISTRO='Ubuntu'
+      else
+        DISTRO='Debian'
+      fi
+    fi
+    ;;
+  *) ;;
+esac
+
+ask_twice() {
+    local prompt="$1"
+    local secret="$2"
+    local val1 val2
+
+    while true; do
+        if [ "$secret" = "true" ]; then
+            read -rsp "$prompt: " val1
+            echo >&2
+        else
+            read -rp "$prompt: " val1
+            echo >&2
+        fi
+
+        if [ "$secret" = "true" ]; then
+            read -rsp "Confirm password: " val2
+            echo >&2
+        else
+            read -rp "Confirm password: " val2
+            echo >&2
+        fi
+
+        if [ "$val1" = "$val2" ]; then
+            printf "${GREEN}Password confirmed${NC}" >&2
+            echo "$val1"
+            break
+        else
+            printf "${RED}Inputs do not match. Please try again${NC}\n" >&2
+            echo -e "\n"
+        fi
+    done
 }
 
-# Function to install Python 3.10
-install_python() {
-    log "${YELLOW}Installing Python 3.10...${NC}"
-    retry_command "sudo apt -qq install build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev -y"
-    retry_command "wget https://www.python.org/ftp/python/3.10.11/Python-3.10.11.tgz"
-    tar -xf Python-3.10.11.tgz
-    cd Python-3.10.11
-    ./configure --prefix=/usr/local --enable-optimizations --enable-shared LDFLAGS="-Wl,-rpath /usr/local/lib"
-    make -j $(nproc)
-    sudo make altinstall
-    cd ..
-    sudo rm -rf Python-3.10.11
-    sudo rm Python-3.10.11.tgz
-    pip3.10 install --user --upgrade pip
-    log "${GREEN}Python3.10 installation successful!${NC}"
-}
+echo -e "${LIGHT_BLUE}Welcome to the ERPNext Installer...${NC}"
+echo -e "\n"
+sleep 3
 
-# Function to install wkhtmltox
-install_wkhtmltox() {
-    log "${YELLOW}Installing wkhtmltox...${NC}"
-    local arch=$(uname -m)
-    case $arch in
-        x86_64) arch="amd64" ;;
-        aarch64) arch="arm64" ;;
-        *) log "${RED}Unsupported architecture: $arch${NC}"; exit 1 ;;
+# Prompt user for version selection with a preliminary message
+echo -e "${YELLOW}Please enter the number of the corresponding ERPNext version you wish to install:${NC}"
+
+versions=("Version 13" "Version 14" "Version 15")
+select version_choice in "${versions[@]}"; do
+    case $REPLY in
+        1) bench_version="version-13"; break;;
+        2) bench_version="version-14"; break;;
+        3) bench_version="version-15"; break;;
+        *) echo -e "${RED}Invalid option. Please select a valid version.${NC}";;
     esac
+done
 
-    retry_command "wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_$arch.deb"
-    retry_command "sudo dpkg -i wkhtmltox_0.12.6.1-2.jammy_$arch.deb || true"
-    sudo cp /usr/local/bin/wkhtmlto* /usr/bin/
-    sudo chmod a+x /usr/bin/wk*
-    sudo rm wkhtmltox_0.12.6.1-2.jammy_$arch.deb
-    retry_command "sudo apt --fix-broken install -y"
-    retry_command "sudo apt install fontconfig xvfb libfontconfig xfonts-base xfonts-75dpi libxrender1 -y"
-    log "${GREEN}wkhtmltox installation successful!${NC}"
-}
+# Confirm the version choice with the user
+echo -e "${GREEN}You have selected $version_choice for installation.${NC}"
+echo -e "${LIGHT_BLUE}Do you wish to continue? (yes/no)${NC}"
+read -p "Response: " continue_install
+continue_install=$(echo "$continue_install" | tr '[:upper:]' '[:lower:]')
 
-# Function to install MariaDB
-install_mariadb() {
-    log "${YELLOW}Installing MariaDB...${NC}"
-    retry_command "sudo apt install mariadb-server mariadb-client -y"
-    log "${GREEN}MariaDB installation successful!${NC}"
-}
+while [[ "$continue_install" != "yes" && "$continue_install" != "y" && "$continue_install" != "no" && "$continue_install" != "n" ]]; do
+    echo -e "${RED}Invalid response. Please answer with 'yes' or 'no'.${NC}"
+    echo -e "${LIGHT_BLUE}Do you wish to continue with the installation of $version_choice? (yes/no)${NC}"
+    read -p "Response: " continue_install
+    continue_install=$(echo "$continue_install" | tr '[:upper:]' '[:lower:]')
+done
 
-# Function to configure MariaDB
-configure_mariadb() {
-    log "${YELLOW}Configuring MariaDB...${NC}"
-    sqlpasswrd=$(ask_twice "Enter the MariaDB root password" "true")
-    retry_command "sudo mysql -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';\""
-    retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';\""
-    retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"DELETE FROM mysql.user WHERE User='';\""
-    retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"DROP DATABASE IF EXISTS test;DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';\""
-    retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"FLUSH PRIVILEGES;\""
+if [[ "$continue_install" == "no" || "$continue_install" == "n" ]]; then
+    # If user chooses 'no', exit the script
+    echo -e "${RED}Installation aborted by user.${NC}"
+    exit 0
+else
+    echo -e "${GREEN}Proceeding with the installation of $version_choice.${NC}"
+fi
+sleep 2
+
+# Check OS compatibility for Version 15
+if [[ "$bench_version" == "version-15" ]]; then
+    if [[ "$(lsb_release -si)" != "Ubuntu" && "$(lsb_release -si)" != "Debian" ]]; then
+        echo -e "${RED}Your Distro is not supported for Version 15.${NC}"
+        exit 1
+    elif [[ "$(lsb_release -si)" == "Ubuntu" && "$(lsb_release -rs)" < "22.04" ]]; then
+        echo -e "${RED}Your Ubuntu version is below the minimum version required to support Version 15.${NC}"
+        exit 1
+    elif [[ "$(lsb_release -si)" == "Debian" && "$(lsb_release -rs)" < "12" ]]; then
+        echo -e "${RED}Your Debian version is below the minimum version required to support Version 15.${NC}"
+        exit 1
+    fi
+fi
+if [[ "$bench_version" != "version-15" ]]; then
+    if [[ "$(lsb_release -si)" != "Ubuntu" && "$(lsb_release -si)" != "Debian" ]]; then
+        echo -e "${RED}Your Distro is not supported for Version 15.${NC}"
+        exit 1
+    elif [[ "$(lsb_release -si)" == "Ubuntu" && "$(lsb_release -rs)" > "22.04" ]]; then
+        echo -e "${RED}Your Ubuntu version is not supported for $version_choice.${NC}"
+        exit 1
+    elif [[ "$(lsb_release -si)" == "Debian" && "$(lsb_release -rs)" > "11" ]]; then
+        echo -e "${RED}Your Debian version is below the minimum version required to support Version 15.${NC}"
+        exit 1
+    fi
+fi
+
+# Check OS and version compatibility for all versions
+check_os
+
+# First Let's take you home
+cd $(sudo -u $USER echo $HOME)
+
+# Next let's set some important parameters.
+# We will need your required SQL root passwords
+echo -e "${YELLOW}Now let's set some important parameters...${NC}"
+sleep 1
+echo -e "${YELLOW}We will need your required SQL root password${NC}"
+sleep 1
+sqlpasswrd=$(ask_twice "What is your required SQL root password" "true")
+sleep 1
+echo -e "\n"
+
+# Now let's make sure your instance has the most updated packages
+echo -e "${YELLOW}Updating system packages...${NC}"
+sleep 2
+sudo apt update
+sudo apt upgrade -y
+echo -e "${GREEN}System packages updated.${NC}"
+sleep 2
+
+# Now let's install a couple of requirements: git, curl and pip
+echo -e "${YELLOW}Installing preliminary package requirements${NC}"
+sleep 3
+sudo apt install software-properties-common git curl -y
+
+# Next we'll install the python environment manager...
+echo -e "${YELLOW}Installing python environment manager and other requirements...${NC}"
+sleep 2
+
+# Install Python 3.10 if not already installed or version is less than 3.10
+py_version=$(python3 --version 2>&1 | awk '{print $2}')
+py_major=$(echo "$py_version" | cut -d '.' -f 1)
+py_minor=$(echo "$py_version" | cut -d '.' -f 2)
+
+if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || [ "$py_major" -eq 3 -a "$py_minor" -lt 10 ]; then
+    echo -e "${LIGHT_BLUE}It appears this instance does not meet the minimum Python version required for ERPNext 14 (Python3.10)...${NC}"
+    sleep 2 
+    echo -e "${YELLOW}Not to worry, we will sort it out for you${NC}"
+    sleep 4
+    echo -e "${YELLOW}Installing Python 3.10+...${NC}"
+    sleep 2
+
+    sudo apt -qq install build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev -y && \
+    wget https://www.python.org/ftp/python/3.10.11/Python-3.10.11.tgz && \
+    tar -xf Python-3.10.11.tgz && \
+    cd Python-3.10.11 && \
+    ./configure --prefix=/usr/local --enable-optimizations --enable-shared LDFLAGS="-Wl,-rpath /usr/local/lib" && \
+    make -j $(nproc) && \
+    sudo make altinstall && \
+    cd .. && \
+    sudo rm -rf Python-3.10.11 && \
+    sudo rm Python-3.10.11.tgz && \
+    pip3.10 install --user --upgrade pip && \
+    echo -e "${GREEN}Python3.10 installation successful!${NC}"
+    sleep 2
+fi
+echo -e "\n"
+echo -e "${YELLOW}Installing additional Python packages and Redis Server${NC}"
+sleep 2
+sudo apt install git python3-dev python3-setuptools python3-venv python3-pip redis-server -y && \
+
+# Detect the architecture
+arch=$(uname -m)
+case $arch in
+    x86_64) arch="amd64" ;;
+    aarch64) arch="arm64" ;;
+    *) echo -e "${RED}Unsupported architecture: $arch${NC}"; exit 1 ;;
+esac
+
+sudo apt install fontconfig libxrender1 xfonts-75dpi xfonts-base -y
+# Download and install wkhtmltox for the detected architecture
+wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_$arch.deb && \
+sudo dpkg -i wkhtmltox_0.12.6.1-2.jammy_$arch.deb || true && \
+sudo cp /usr/local/bin/wkhtmlto* /usr/bin/ && \
+sudo chmod a+x /usr/bin/wk* && \
+sudo rm wkhtmltox_0.12.6.1-2.jammy_$arch.deb && \
+sudo apt --fix-broken install -y && \
+sudo apt install fontconfig xvfb libfontconfig xfonts-base xfonts-75dpi libxrender1 -y && \
+
+echo -e "${GREEN}Done!${NC}"
+sleep 1
+echo -e "\n"
+#... And mariadb with some extra needed applications.
+echo -e "${YELLOW}Now installing MariaDB and other necessary packages...${NC}"
+sleep 2
+sudo apt install mariadb-server mariadb-client -y
+echo -e "${GREEN}MariaDB and other packages have been installed successfully.${NC}"
+sleep 2
+
+# Use a hidden marker file to determine if this section of the script has run before.
+MARKER_FILE=~/.mysql_configured.marker
+
+if [ ! -f "$MARKER_FILE" ]; then
+    # Now we'll go through the required settings of the mysql_secure_installation...
+    echo -e ${YELLOW}"Now we'll go ahead to apply MariaDB security settings...${NC}"
+    sleep 2
+
+    sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "DELETE FROM mysql.user WHERE User='';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "DROP DATABASE IF EXISTS test;DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
+
+    echo -e "${YELLOW}...And add some settings to /etc/mysql/my.cnf:${NC}"
+    sleep 2
 
     sudo bash -c 'cat << EOF >> /etc/mysql/my.cnf
 [mysqld]
@@ -326,187 +289,254 @@ collation-server = utf8mb4_unicode_ci
 default-character-set = utf8mb4
 EOF'
 
-    retry_command "sudo service mysql restart"
-    log "${GREEN}MariaDB configuration successful!${NC}"
-}
+    sudo service mysql restart
 
-# Function to install Node.js, and Yarn
-install_nodejs() {
-    log "${YELLOW}Installing Node.js, and Yarn...${NC}"
-
-    # Install NVM
-    retry_command "curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash"
-
-    # Install Node.js based on bench version
-    if [[ "$bench_version" == "version-15" ]]; then
-        retry_command "nvm install 18"
-        node_version="18"
-    else
-        retry_command "nvm install 16"
-        node_version="16"
-    fi
-
-    # Install Yarn
-    retry_command "sudo apt-get -qq install npm -y"
-    retry_command "sudo npm install -g yarn"
-
-    log "${GREEN}Node.js and Yarn installation successful!${NC}"
-}
-
-# Function to install Bench
-install_bench() {
-    log "${YELLOW}Installing Bench...${NC}"
-    retry_command "sudo apt install python3-pip -y"
-    retry_command "sudo pip3 install frappe-bench"
-    log "${GREEN}Bench installation successful!${NC}"
-}
-
-# Function to initialize Bench
-initialize_bench() {
-    log "${YELLOW}Initializing Bench...${NC}"
-    retry_command "bench init frappe-bench --version $bench_version --verbose"
-    log "${GREEN}Bench initialization successful!${NC}"
-}
-
-# Function to create a new site
-create_site() {
-    log "${YELLOW}Creating new site...${NC}"
-    retry_command "bench new-site $site_name --db-root-password $sqlpasswrd --admin-password $adminpasswrd"
-    log "${GREEN}Site creation successful!${NC}"
-}
-
-# Function to install ERPNext
-install_erpnext() {
-    log "${YELLOW}Installing ERPNext...${NC}"
-    retry_command "bench get-app erpnext --branch $bench_version"
-    retry_command "bench --site $site_name install-app erpnext"
-    log "${GREEN}ERPNext installation successful!${NC}"
-}
-
-# Function to configure production environment
-configure_production() {
-    log "${YELLOW}Configuring production environment...${NC}"
-    yes | sudo bench setup production $USER
-    retry_command "sudo service supervisor restart"
-    retry_command "bench --site $site_name scheduler enable"
-    retry_command "bench --site $site_name scheduler resume"
-    if [[ "$bench_version" == "version-15" ]]; then
-        retry_command "bench setup socketio"
-        yes | bench setup supervisor
-        retry_command "bench setup redis"
-        retry_command "sudo supervisorctl reload"
-    fi
-    log "${GREEN}Production configuration successful!${NC}"
-}
-
-# Function to install SSL
-install_ssl() {
-    log "${YELLOW}Installing SSL certificate...${NC}"
-    retry_command "sudo apt install snapd -y"
-    retry_command "sudo snap install core"
-    retry_command "sudo snap refresh core"
-    retry_command "sudo snap install --classic certbot"
-    retry_command "sudo ln -s /snap/bin/certbot /usr/bin/certbot"
-    retry_command "sudo certbot --nginx --non-interactive --agree-tos --email $email_address -d $site_name"
-    log "${GREEN}SSL certificate installation successful!${NC}"
-}
-
-# Function to clean up temporary files
-cleanup() {
-    log "${YELLOW}Cleaning up temporary files...${NC}"
-    rm -rf $temp_dir
-    log "${GREEN}Cleanup complete!${NC}"
-}
-
-# Main script execution
-log "${LIGHT_BLUE}Welcome to the ERPNext Installer...${NC}"
-sleep 2
-
-# Check disk space
-check_disk_space
-
-# Create temporary workspace
-temp_dir=$(mktemp -d)
-cd $temp_dir
-
-# Install dependencies
-install_dependencies
-
-# Install Python 3.10 if required
-py_version=$(python3 --version 2>&1 | awk '{print $2}')
-py_major=$(echo "$py_version" | cut -d '.' -f 1)
-py_minor=$(echo "$py_version" | cut -d '.' -f 2)
-
-if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || [ "$py_major" -eq 3 -a "$py_minor" -lt 10 ]; then
-    install_python
+    # Create the hidden marker file to indicate this section of the script has run.
+    touch "$MARKER_FILE"
+    echo -e "${GREEN}MariaDB settings done!${NC}"
+    echo -e "\n"
+    sleep 1
 fi
 
-# Install wkhtmltox
-install_wkhtmltox
+# Install NVM, Node, npm and yarn
+echo -e ${YELLOW}"Now to install NVM, Node, npm and yarn${NC}"
+sleep 2
+curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash
 
-# Install MariaDB
-install_mariadb
+# Add environment variables to .profile
+echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.profile
+echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.profile
+echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.profile
 
-# Configure MariaDB
-configure_mariadb
+# Source .profile to load the new environment variables in the current session
+source ~/.profile
 
-# Install NVM, Node.js, and Yarn
-install_nodejs
+# Conditional Node.js installation based on the version of ERPNext selected
+if [[ "$bench_version" == "version-15" ]]; then
+    nvm install 18
+    node_version="18"
+else
+    nvm install 16
+    node_version="16"
+fi
 
-# Install Bench
-install_bench
-
-# Initialize Bench
-initialize_bench
-
-# Prompt user for site name
-log "${YELLOW}Preparing for Production installation. This could take a minute... or two so please be patient.${NC}"
-read -p "Enter the site name (If you wish to install SSL later, please enter a FQDN): " site_name
-while ! validate_domain "$site_name"; do
-    read -p "Enter the site name (If you wish to install SSL later, please enter a FQDN): " site_name
-done
-sleep 1
-adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
-while ! validate_password "$adminpasswrd"; do
-    adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
-done
-echo -e "\n"
+sudo apt-get -qq install npm -y
+sudo npm install -g yarn
+echo -e "${GREEN}Package installation complete!${NC}"
 sleep 2
 
-# Create a new site
-create_site
+# Now let's reactivate virtual environment
+if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || [ "$py_major" -eq 3 -a "$py_minor" -lt 10 ]; then
+    python3.10 -m venv $USER && \
+    source $USER/bin/activate
+    nvm use $node_version
+fi
 
-# Install ERPNext
-install_erpnext
+# Install bench
+echo -e "${YELLOW}Now let's install bench${NC}"
+sleep 2
 
-# Configure production environment
-configure_production
+# Check if EXTERNALLY-MANAGED file exists and remove it
+externally_managed_file=$(find /usr/lib/python3.*/EXTERNALLY-MANAGED 2>/dev/null || true)
+if [[ -n "$externally_managed_file" ]]; then
+    sudo python3 -m pip config --global set global.break-system-packages true
+fi
 
-# Install SSL if requested
-log "${YELLOW}Would you like to install SSL? (yes/no)${NC}"
-read -p "Response: " continue_ssl
-continue_ssl=$(echo "$continue_ssl" | tr '[:upper:]' '[:lower:]')
 
-case "$continue_ssl" in
+sudo apt install python3-pip -y
+sudo pip3 install frappe-bench
+
+# Initiate bench in frappe-bench folder, but get a supervisor can't restart bench error...
+echo -e "${YELLOW}Initialising bench in frappe-bench folder.${NC}"
+echo -e "${LIGHT_BLUE}If you get a restart failed, don't worry, we will resolve that later.${NC}"
+bench init frappe-bench --version $bench_version --verbose
+echo -e "${GREEN}Bench installation complete!${NC}"
+sleep 1
+
+# Prompt user for site name
+echo -e "${YELLOW}Preparing for Production installation. This could take a minute... or two so please be patient.${NC}"
+read -p "Enter the site name (If you wish to install SSL later, please enter a FQDN): " site_name
+sleep 1
+adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
+echo -e "\n"
+sleep 2
+echo -e "${YELLOW}Now setting up your site. This might take a few minutes. Please wait...${NC}"
+sleep 1
+# Change directory to frappe-bench
+cd frappe-bench && \
+
+sudo chmod -R o+rx $(echo $HOME)
+
+bench new-site $site_name --db-root-password $sqlpasswrd --admin-password $adminpasswrd
+
+# Prompt user to confirm if they want to install ERPNext
+
+echo -e "${LIGHT_BLUE}Would you like to install ERPNext? (yes/no)${NC}"
+read -p "Response: " erpnext_install
+erpnext_install=$(echo "$erpnext_install" | tr '[:upper:]' '[:lower:]')
+case "$erpnext_install" in
     "yes" | "y")
-        read -p "Enter your email address: " email_address
-        install_ssl
-        ;;
-    *)
-        log "${RED}Skipping SSL installation...${NC}"
-        sleep 3
-        ;;
+    sleep 2
+    # Setup supervisor and nginx config
+    bench get-app erpnext --branch $bench_version && \
+    bench --site $site_name install-app erpnext
+    sleep 1
 esac
 
-# Clean up temporary files
-cleanup
+# Dynamically set the Python version for the playbook file path
+python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+playbook_file="/usr/local/lib/python${python_version}/dist-packages/bench/playbooks/roles/mariadb/tasks/main.yml"
+sudo sed -i 's/- include: /- include_tasks: /g' $playbook_file
 
-# Display installation summary
-log "${GREEN}--------------------------------------------------------------------------------"
-log "Congratulations! You have successfully installed ERPNext $version_choice."
-log "You can start using your new ERPNext installation by visiting https://$site_name"
-log "(if you have enabled SSL and used a Fully Qualified Domain Name"
-log "during installation) or http://$server_ip to begin."
-log "Install additional apps as required. Visit https://docs.erpnext.com for Documentation."
-log "Enjoy using ERPNext!"
-log "--------------------------------------------------------------------------------${NC}"
+echo -e "${LIGHT_BLUE}Would you like to continue with production install? (yes/no)${NC}"
+read -p "Response: " continue_prod
+continue_prod=$(echo "$continue_prod" | tr '[:upper:]' '[:lower:]')
+case "$continue_prod" in
+    "yes" | "y")
+
+    echo -e "${YELLOW}Installing packages and dependencies for Production...${NC}"
+    sleep 2
+    # Setup supervisor and nginx config
+    yes | sudo bench setup production $USER && \
+    echo -e "${YELLOW}Applying necessary permissions to supervisor...${NC}"
+    sleep 1
+    # Change ownership of supervisord.conf
+    # Path to the supervisord.conf file
+    FILE="/etc/supervisor/supervisord.conf"
+    # Construct the search pattern with the current $USER environment variable
+    SEARCH_PATTERN="chown=$USER:$USER"
+
+    # Check if the pattern exists in the file
+    if grep -q "$SEARCH_PATTERN" "$FILE"; then
+        echo -e "${YELLOW}User ownership already exists for supervisord. Updating it...${NC}"
+        # Replace the existing line with the new user ownership line
+        sudo sed -i "/chown=.*/c $SEARCH_PATTERN" "$FILE"
+    else
+        echo -e "${YELLOW}User ownership does not exist for supervisor. Adding it...${NC}"
+        # Insert the new user ownership line at a specific line number
+        sudo sed -i "5a $SEARCH_PATTERN" "$FILE"
+    fi
+
+    # Restart supervisor
+    sudo service supervisor restart && \
+
+    # Setup production again to reflect the new site
+    yes | sudo bench setup production $USER && \
+
+    echo -e "${YELLOW}Enabling Scheduler...${NC}"
+    sleep 1
+    # Enable and resume the scheduler for the site
+    bench --site $site_name scheduler enable && \
+    bench --site $site_name scheduler resume && \
+    if [[ "$bench_version" == "version-15" ]]; then
+        echo -e "${YELLOW}Setting up Socketio, Redis and Supervisor...${NC}"
+        sleep 1
+        bench setup socketio
+        yes | bench setup supervisor
+        bench setup redis
+        sudo supervisorctl reload
+    fi
+    echo -e "${YELLOW}Restarting bench to apply all changes and optimizing environment pernissions.${NC}"
+    sleep 1
+
+
+    # Now to make sure the environment is fully setup
+    sudo chmod 755 $(echo $HOME)
+    sleep 3
+    printf "${GREEN}Production setup complete! "
+    printf '\xF0\x9F\x8E\x86'
+    printf "${NC}\n"
+    sleep 3
+
+    echo -e "${LIGHT_BLUE}Would you like to install HRMS? (yes/no)${NC}"
+    read -p "Response: " hrms_install
+    hrms_install=$(echo "$hrms_install" | tr '[:upper:]' '[:lower:]')
+    case "$hrms_install" in
+        "yes" | "y")
+        sleep 2
+        # Setup supervisor and nginx config
+        bench get-app hrms --branch $bench_version && \
+        bench --site $site_name install-app hrms
+        sleep 1
+    esac
+
+    echo -e "${YELLOW}Would you like to install SSL? (yes/no)${NC}"
+
+    read -p "Response: " continue_ssl
+    continue_ssl=$(echo "$continue_ssl" | tr '[:upper:]' '[:lower:]')
+
+    case "$continue_ssl" in
+        "yes" | "y")
+            echo -e "${YELLOW}Make sure your domain name is pointed to the IP of this instance and is reachable before your proceed.${NC}"
+            sleep 3
+            # Prompt user for email
+            read -p "Enter your email address: " email_address
+
+            # Install Certbot
+            echo -e "${YELLOW}Installing Certbot...${NC}"
+            sleep 1
+            if [ "$DISTRO" == "Debian" ]; then
+                echo -e "${YELLOW}Fixing openssl package on Debian...${NC}"
+                sleep 4
+                sudo pip3 uninstall cryptography -y
+                yes | sudo pip3 install pyopenssl==22.0.0 cryptography==36.0.0
+                echo -e "${GREEN}Package fixed${NC}"
+                sleep 2
+            fi
+            # Install Certbot Classic
+            sudo apt install snapd -y && \
+            sudo snap install core && \
+            sudo snap refresh core && \
+            sudo snap install --classic certbot && \
+            sudo ln -s /snap/bin/certbot /usr/bin/certbot
+            
+            # Obtain and Install the certificate
+            echo -e "${YELLOW}Obtaining and installing SSL certificate...${NC}"
+            sleep 2
+            sudo certbot --nginx --non-interactive --agree-tos --email $email_address -d $site_name
+            echo -e "${GREEN}SSL certificate installed successfully.${NC}"
+            sleep 2
+            ;;
+        *)
+            echo -e "${RED}Skipping SSL installation...${NC}"
+            sleep 3
+            ;;
+    esac
+
+    # Now let's deactivate virtual environment
+    if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || [ "$py_major" -eq 3 -a "$py_minor" -lt 10 ]; then
+        deactivate
+    fi
+
+    echo -e "${GREEN}--------------------------------------------------------------------------------"
+    echo -e "Congratulations! You have successfully installed ERPNext $version_choice."
+    echo -e "You can start using your new ERPNext installation by visiting https://$site_name"
+    echo -e "(if you have enabled SSL and used a Fully Qualified Domain Name"
+    echo -e "during installation) or http://$server_ip to begin."
+    echo -e "Install additional apps as required. Visit https://docs.erpnext.com for Documentation."
+    echo -e "Enjoy using ERPNext!"
+    echo -e "--------------------------------------------------------------------------------${NC}"
+        ;;
+    *)
+
+    echo -e "${YELLOW}Getting your site ready for development...${NC}"
+    sleep 2
+    source ~/.profile
+    if [[ "$bench_version" == "version-15" ]]; then
+        nvm alias default 18
+    else
+        nvm alias default 16
+    fi
+    bench use $site_name
+    bench build
+    echo -e "${GREEN}Done!"
+    sleep 5
+
+    echo -e "${GREEN}-----------------------------------------------------------------------------------------------"
+    echo -e "Congratulations! You have successfully installed Frappe and ERPNext $version_choice Development Environment."
+    echo -e "Start your instance by running bench start to start your server and visiting http://$server_ip:8000"
+    echo -e "Install additional apps as required. Visit https://frappeframework.com for Developer Documentation."
+    echo -e "Enjoy development with Frappe!"
+    echo -e "-----------------------------------------------------------------------------------------------${NC}"
+    ;;
+esac
