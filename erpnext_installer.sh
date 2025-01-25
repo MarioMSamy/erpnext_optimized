@@ -79,6 +79,33 @@ validate_password() {
     return 0
 }
 
+# Function to securely prompt for input twice (e.g., passwords)
+ask_twice() {
+    local prompt="$1"
+    local is_password="$2"
+    local value1=""
+    local value2=""
+
+    while true; do
+        if [[ "$is_password" == "true" ]]; then
+            read -sp "$prompt: " value1
+            echo
+            read -sp "Confirm $prompt: " value2
+            echo
+        else
+            read -p "$prompt: " value1
+            read -p "Confirm $prompt: " value2
+        fi
+
+        if [[ "$value1" == "$value2" ]]; then
+            echo "$value1"
+            return 0
+        else
+            echo -e "${RED}Inputs do not match. Please try again.${NC}"
+        fi
+    done
+}
+
 # Retry mechanism for failed commands
 retry_command() {
     local command="$1"
@@ -282,6 +309,7 @@ install_mariadb() {
 # Function to configure MariaDB
 configure_mariadb() {
     log "${YELLOW}Configuring MariaDB...${NC}"
+    sqlpasswrd=$(ask_twice "Enter the MariaDB root password" "true")
     retry_command "sudo mysql -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';\""
     retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';\""
     retry_command "sudo mysql -u root -p\"$sqlpasswrd\" -e \"DELETE FROM mysql.user WHERE User='';\""
