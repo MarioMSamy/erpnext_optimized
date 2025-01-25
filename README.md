@@ -43,12 +43,12 @@ wget https://raw.githubusercontent.com/MarioMSamy/erpnext_optimized/refs/heads/m
 
 ### Make It Executable
 ```bash
-chmod +x advanced_erpnext_installer.sh
+chmod +x erpnext_installer.sh
 ```
 
 ### Run the Script
 ```bash
-sudo ./advanced_erpnext_installer.sh
+sudo ./erpnext_installer.sh
 ```
 
 ### Follow the Prompts
